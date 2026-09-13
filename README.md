@@ -6,6 +6,7 @@ Keep skills in their own repositories, choose which ones each agent receives, an
 An early prototype, extracted from a working dotfiles setup.
 Requires [uv](https://docs.astral.sh/uv/) and Git.
 There is no background service or registry.
+Released under the [MIT license](LICENSE).
 
 ## Try it
 
