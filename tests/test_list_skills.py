@@ -14,6 +14,13 @@ with patch.object(
 
 
 class CatalogTests(unittest.TestCase):
+    def test_template_cannot_be_overwritten_as_a_catalog(self):
+        template = Path(listing.__file__).resolve().parent / "templates/skills.html"
+        before = template.read_bytes()
+        with self.assertRaisesRegex(ValueError, "HTML template"):
+            listing.write_html(template, listing.HTML_MARKER + "private content")
+        self.assertEqual(template.read_bytes(), before)
+
     def test_private_catalog_write_preserves_unrelated_files_and_symlinks(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

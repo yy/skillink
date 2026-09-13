@@ -31,6 +31,10 @@ HTML_MARKER = '<meta name="generator" content="skillink">'
 def write_html(output: Path, content: str) -> None:
     require(output.suffix.lower() == ".html", "HTML output must end in .html")
     require(not output.is_symlink(), f"refusing to overwrite a symlink: {output}")
+    require(
+        output.resolve() != Path(__file__).resolve().parent / "templates/skills.html",
+        "refusing to overwrite the HTML template",
+    )
     if output.exists():
         require(
             output.is_file() and HTML_MARKER in output.read_text(),
