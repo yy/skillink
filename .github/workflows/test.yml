@@ -1,0 +1,16 @@
+name: Tests
+on: [push, pull_request]
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v8.3.2
+      - run: uv run --python 3.11 --with pyyaml python -m unittest discover -s tests -v
+      - run: uvx ruff check bin tests
+      - run: uv run bin/install_skills.py demo --manifest examples/skills.toml
+      - run: uv run bin/install_skills.py demo --manifest examples/skills.toml --check
+      - run: uv run bin/list_skills.py --manifest examples/skills.toml --html .demo/skills.html

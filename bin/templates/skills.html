@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Skill library</title>
+<style>
+:root{color-scheme:light;--ink:#243632;--muted:#62716b;--line:#dce3dd;--accent:#246652}
+*{box-sizing:border-box}body{margin:0;background:#f6f7f2;color:var(--ink);font:16px/1.55 system-ui,sans-serif}
+main{max-width:1240px;margin:auto;padding:52px 36px}header{margin-bottom:32px}
+.eyebrow{text-transform:uppercase;letter-spacing:.14em;font-size:12px;color:var(--accent);font-weight:700}
+h1{font-size:clamp(32px,5vw,48px);line-height:1.15;letter-spacing:-.04em;margin:10px 0}
+header p{color:var(--muted);margin:0}.controls{display:flex;gap:16px;align-items:end;flex-wrap:wrap}
+label{display:grid;gap:5px;font-size:13px;font-weight:600}.search{flex:1;min-width:220px}
+input,select,button{font:inherit;border:1px solid #b9c6bc;border-radius:7px;background:white;color:var(--ink);padding:11px 13px;min-height:46px}
+select{min-width:145px}button{cursor:pointer}button:hover{background:#eaf0e9}
+:focus-visible{outline:3px solid #79a895;outline-offset:3px}
+.status{font-size:13px;color:var(--muted);margin:18px 0 10px}table{border-collapse:collapse;width:100%;table-layout:fixed;background:white;border-top:2px solid var(--accent)}
+thead th{text-align:left;text-transform:uppercase;letter-spacing:.09em;font-size:11px;color:var(--muted);padding:13px 20px;background:#eef2eb}
+.name-col{width:26%}.profile-col{width:18%}td,tbody th{padding:21px 20px;vertical-align:top;border-bottom:1px solid var(--line);text-align:left}
+tbody th{font-weight:normal}.name{display:block;font-weight:650;overflow-wrap:anywhere;font-size:15px}
+.source{display:block;font:12px/1.7 ui-monospace,monospace;color:var(--muted);margin-top:4px}
+td p{margin:0;font-size:14px}.tag,.variant{display:inline-block;border-radius:4px;padding:3px 7px;background:#edf3ee;font-size:11px;margin:0 4px 5px 0;color:var(--accent)}
+.variant{background:#fff2d5;color:#785819;margin-top:8px}.muted{font-size:12px;color:var(--muted)}
+summary{cursor:pointer;font-size:12px;color:var(--accent);margin-top:12px;width:fit-content}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f6f7f4;padding:15px;border-radius:6px;font:12px/1.65 ui-monospace,monospace;max-height:480px;overflow:auto}
+.path{font-size:11px;color:var(--muted);overflow-wrap:anywhere}footer{margin-top:30px;font-size:12px;color:var(--muted)}footer p{margin:5px 0;overflow-wrap:anywhere}
+#empty{padding:40px;text-align:center;background:white;color:var(--muted)}[hidden]{display:none!important}
+@media(max-width:700px){main{padding:28px 16px}.controls{gap:10px}.search{flex-basis:100%}label{flex:1}select{min-width:0;width:100%}thead{display:none}table,tbody,tr,td,tbody th{display:block;width:100%}tr{padding:16px 0;border-bottom:1px solid var(--line)}td,tbody th{border:0;padding:5px 16px}.profiles{padding-top:12px}}
+@media print{body{background:white}main{padding:0}.controls,summary,.status{display:none}h1{font-size:28px}tr{break-inside:avoid}details:not([open]){display:none}}
+</style>
+</head>
+<body>
+<main>
+<header><span class="eyebrow">Personal reference</span><h1>Skill library</h1>
+<p>What each skill does, and where you use it.</p></header>
+<div class="controls">
+<label class="search">Search skills<input id="query" type="search" placeholder="Try citations, receipts, or LaTeX…" autocomplete="off"></label>
+<label>Source<select id="source"><option value="">All sources</option>{{sources}}</select></label>
+<label>Profile<select id="profile"><option value="">All profiles</option>{{profiles}}</select></label>
+<button id="clear" type="button">Clear</button>
+</div>
+<p class="status" id="count" role="status" aria-live="polite">{{count}} entries</p>
+<table aria-label="Skills and descriptions"><thead><tr><th class="name-col" scope="col">Skill / source</th><th scope="col">What it does</th><th class="profile-col" scope="col">Profiles</th></tr></thead><tbody>{{rows}}</tbody></table>
+<p id="empty" hidden>No matching skills. Try a different search or clear the filters.</p>
+<noscript><p>All entries are listed below. Enable JavaScript to search and filter.</p></noscript>
+<footer><p>Profiles show manifest selections, not installation status. Detailed variants appear as separate entries.</p><p>Generated {{updated}} · Works offline</p><p>{{manifest}}</p></footer>
+</main>
+<script>
+const rows = [...document.querySelectorAll('tbody tr')];
+const query = document.querySelector('#query');
+const source = document.querySelector('#source');
+const profile = document.querySelector('#profile');
+const count = document.querySelector('#count');
+const searchable = rows.map(row => [row, (row.querySelector('th').textContent + ' ' + row.querySelector('td p').textContent).toLowerCase()]);
+function filter() {
+  const words = query.value.toLowerCase().trim().split(/\s+/).filter(Boolean);
+  let visible = 0;
+  for (const [row, text] of searchable) {
+    const show = words.every(word => text.includes(word)) && (!source.value || row.dataset.source === source.value) && (!profile.value || row.dataset.profiles.split(' ').includes(profile.value));
+    row.hidden = !show;
+    if (show) visible++;
+  }
+  count.textContent = `${visible} of ${rows.length} entries`;
+  document.querySelector('#empty').hidden = visible !== 0;
+}
+query.addEventListener('input', filter);
+source.addEventListener('change', filter);
+profile.addEventListener('change', filter);
+document.querySelector('#clear').addEventListener('click', () => { query.value = ''; source.value = ''; profile.value = ''; filter(); query.focus(); });
+filter();
+</script>
+</body>
+</html>

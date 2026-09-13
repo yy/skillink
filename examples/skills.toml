@@ -1,0 +1,16 @@
+format_version = 1
+
+# Local directories containing one folder per skill.
+[sources]
+demo = "source"
+# personal = "../../personal-skills"
+# team = "../../team-skills/skills"
+
+[profiles.demo]
+target = "../.demo/skills"
+include = ["demo/*"]
+# exclude = ["demo/some-skill"]
+
+# Add an override only after creating its file.
+# [profiles.demo.variants]
+# "demo/hello" = "detailed"
