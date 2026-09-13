@@ -4,15 +4,20 @@ import contextlib
 import importlib.util
 import io
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location(
     "update_sources", Path(__file__).resolve().parents[1] / "bin/update_sources.py"
 )
 updater = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(updater)
+with patch.object(
+    sys, "path", [str(Path(__file__).resolve().parents[1] / "bin"), *sys.path]
+):
+    SPEC.loader.exec_module(updater)
 
 
 class UpdateTests(unittest.TestCase):

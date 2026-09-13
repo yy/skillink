@@ -4,3 +4,11 @@ __pycache__/
 .ruff_cache/
 .demo/
 .DS_Store
+
+# Local configuration, installation state, and generated catalogs
+/skills.toml
+.skillink.json
+*.html
+!bin/templates/skills.html
+.env
+.env.*

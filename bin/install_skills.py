@@ -17,6 +17,7 @@ import tomllib
 from pathlib import Path
 
 import yaml
+from manifest_path import manifest_path
 
 STATE = ".skillink.json"
 NAME = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -226,6 +227,11 @@ def plan(
             state["manifest"] == str(manifest),
             f"{destination}: owned by another manifest: {state['manifest']}",
         )
+    if state:
+        require(
+            state["profile"] == profile,
+            f"{destination}: owned by another profile: {state['profile']}",
+        )
     owned = state.get("skills", {}).copy()
     if migrate and not whole_link and destination.is_dir():
         for path in destination.iterdir():
@@ -334,6 +340,11 @@ def install_safe(manifest: Path, profile: str, target: str | None = None) -> int
             state["manifest"] == str(manifest),
             f"{destination}: owned by another manifest",
         )
+    if state:
+        require(
+            state["profile"] == profile,
+            f"{destination}: owned by another profile: {state['profile']}",
+        )
     owned = state.get("skills", {}).copy()
     additions = {}
     for name, spec in desired.items():
@@ -369,7 +380,7 @@ def main() -> int:
     parser.add_argument(
         "--manifest",
         type=Path,
-        default=Path.cwd() / "skills.toml",
+        help="manifest path (default: user Skillink configuration)",
     )
     parser.add_argument("--target", help="override the profile's installation directory")
     mode = parser.add_mutually_exclusive_group()
@@ -394,11 +405,9 @@ def main() -> int:
         parser.error("--safe and --migrate cannot be combined")
     try:
         if args.safe:
-            return install_safe(
-                args.manifest.expanduser().resolve(), args.profile, args.target
-            )
+            return install_safe(manifest_path(args.manifest), args.profile, args.target)
         return install(
-            args.manifest.expanduser().resolve(),
+            manifest_path(args.manifest),
             args.profile,
             args.target,
             args.dry_run,

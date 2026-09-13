@@ -14,6 +14,26 @@ with patch.object(
 
 
 class CatalogTests(unittest.TestCase):
+    def test_private_catalog_write_preserves_unrelated_files_and_symlinks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = root / "catalog.html"
+            content = listing.HTML_MARKER + "private instructions"
+            listing.write_html(output, content)
+            self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+            output.chmod(0o644)
+            listing.write_html(output, content + " updated")
+            self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+            output.write_text("unrelated document")
+            with self.assertRaises(ValueError):
+                listing.write_html(output, content)
+            self.assertEqual(output.read_text(), "unrelated document")
+            link = root / "link.html"
+            link.symlink_to(output)
+            with self.assertRaises(ValueError):
+                listing.write_html(link, content)
+            self.assertEqual(output.read_text(), "unrelated document")
+
     def test_sources_exclusions_and_variants(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

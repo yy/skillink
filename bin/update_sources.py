@@ -10,6 +10,8 @@ import sys
 import tomllib
 from pathlib import Path
 
+from manifest_path import manifest_path
+
 
 def git(root: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True)
@@ -17,7 +19,11 @@ def git(root: Path, *args: str) -> subprocess.CompletedProcess:
 
 def update(manifest: Path, dry_run: bool = False) -> int:
     data = tomllib.loads(manifest.read_text())
-    if data.get("format_version") != 1 or not isinstance(data.get("sources"), dict):
+    if (
+        type(data.get("format_version")) is not int
+        or data["format_version"] != 1
+        or not isinstance(data.get("sources"), dict)
+    ):
         raise ValueError("expected a version 1 manifest with a sources table")
     repos = {}
     failed = False
@@ -55,11 +61,15 @@ def update(manifest: Path, dry_run: bool = False) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, default=Path.cwd() / "skills.toml")
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        help="manifest path (default: user Skillink configuration)",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     try:
-        return update(args.manifest.expanduser().resolve(), args.dry_run)
+        return update(manifest_path(args.manifest), args.dry_run)
     except (OSError, ValueError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

@@ -4,15 +4,20 @@ import contextlib
 import importlib.util
 import io
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location(
     "install_skills", Path(__file__).resolve().parents[1] / "bin/install_skills.py"
 )
 installer = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(installer)
+with patch.object(
+    sys, "path", [str(Path(__file__).resolve().parents[1] / "bin"), *sys.path]
+):
+    SPEC.loader.exec_module(installer)
 
 
 class InstallationTests(unittest.TestCase):
@@ -69,6 +74,17 @@ class InstallationTests(unittest.TestCase):
         self.assertTrue((self.source / "alpha/SKILL.md").is_file())
         self.assertTrue((self.target / "unrelated").is_dir())
         self.assertTrue((self.target / "foreign").is_symlink())
+
+    def test_another_profile_cannot_take_over_destination(self):
+        self.run_install()
+        before = (self.target / installer.STATE).read_bytes()
+        with self.manifest.open("a") as stream:
+            stream.write('\n[profiles.other]\ntarget = "installed"\ninclude = []\n')
+        for run in (installer.install, installer.install_safe):
+            with self.assertRaisesRegex(installer.InstallError, "another profile"):
+                run(self.manifest, "other")
+        self.assertEqual((self.target / installer.STATE).read_bytes(), before)
+        self.assertTrue((self.target / "alpha").is_symlink())
 
     def test_conflict_preflight_preserves_entire_install(self):
         self.run_install()
