@@ -64,7 +64,7 @@ See [SPEC.md](SPEC.md) for the complete format.
 
 | Script | Purpose |
 | --- | --- |
-| `bin/install_skills.py PROFILE` | Validate a profile and reconcile its symlinks. Supports `--dry-run`, `--check`, `--safe`, `--migrate`, and `--target`. |
+| `bin/install_skills.py PROFILE` | Validate a profile and reconcile its symlinks. Supports `--dry-run`, `--check`, `--safe`, `--migrate`, `--import-state`, and `--target`. |
 | `bin/list_skills.py` | List names, descriptions, and profiles. Use a search term, `--profile`, `--html [PATH]`, or `--open`. |
 | `bin/update_sources.py` | Find the source checkouts and update each once with `git pull --ff-only`. Use `--dry-run` to preview without network requests. |
 
@@ -86,6 +86,22 @@ It preserves unrelated files and refuses to replace managed entries that someone
 `--safe` only adds missing entries; it leaves existing and obsolete entries alone.
 `--migrate` can adopt legacy links into manifest source roots and replace a whole-directory source symlink with individual skill links.
 It does not overwrite arbitrary directories.
+
+### Import an existing ownership record
+
+For installations using the predecessor's version-1 JSON ownership format, import the record before reconciling skills:
+
+```bash
+uv run bin/install_skills.py claude --import-state ~/.claude/skills/.dotfiles-skills.json --dry-run
+uv run bin/install_skills.py claude --import-state ~/.claude/skills/.dotfiles-skills.json
+uv run bin/install_skills.py claude --check
+```
+
+The import file must be in the target directory and contain `version`, `manifest`, `profile`, and `skills` fields in Skillink's state format.
+Import verifies the manifest/profile identity and all existing owned links, preserves ownership of obsolete entries, writes `.skillink.json`, and archives the original as `<filename>.migrated`.
+It leaves skill links and unrelated files unchanged and refuses conflicting records or an existing archive.
+`--dry-run` previews the transfer; `--check` reports a pending import without writing.
+Use a normal installation afterward to reconcile any changes to the manifest.
 
 The default skill is `SKILL.md`.
 A selected `variants/detailed.md` replaces the instruction file while retaining shared scripts, references, and assets.

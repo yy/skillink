@@ -64,6 +64,71 @@ class InstallationTests(unittest.TestCase):
         self.run_install()
         self.assertEqual(stamp, state.stat().st_mtime_ns)
 
+    def test_import_preserves_ownership_and_archives_original(self):
+        self.run_install()
+        state = self.target / installer.STATE
+        legacy = self.target / ".previous-skills.json"
+        state.rename(legacy)
+        original = legacy.read_bytes()
+        self.write_manifest(include="[]")
+        installer.import_state(self.manifest, "test", legacy, dry_run=True)
+        self.assertFalse(state.exists())
+        self.assertEqual(legacy.read_bytes(), original)
+        installer.import_state(self.manifest, "test", legacy)
+        self.assertFalse(legacy.exists())
+        self.assertEqual(
+            legacy.with_name(legacy.name + ".migrated").read_bytes(), original
+        )
+        self.assertTrue((self.target / "alpha").is_symlink())
+        self.assertIn("alpha", json.loads(state.read_text())["skills"])
+        self.run_install()
+        self.assertFalse((self.target / "alpha").is_symlink())
+
+    def test_import_conflicts_do_not_change_state_or_links(self):
+        self.run_install()
+        state = self.target / installer.STATE
+        original = state.read_bytes()
+        legacy = self.target / ".previous-skills.json"
+        state.rename(legacy)
+        wrong = json.loads(original)
+        wrong["profile"] = "other"
+        legacy.write_text(json.dumps(wrong))
+        with self.assertRaisesRegex(
+            installer.InstallError, "another manifest or profile"
+        ):
+            installer.import_state(self.manifest, "test", legacy)
+        legacy.write_bytes(original)
+        link = self.target / "alpha"
+        link.unlink()
+        link.symlink_to(self.root / "unrelated")
+        with self.assertRaisesRegex(installer.InstallError, "modified"):
+            installer.import_state(self.manifest, "test", legacy)
+        self.assertFalse(state.exists())
+        self.assertEqual(legacy.read_bytes(), original)
+        self.assertEqual(link.readlink(), self.root / "unrelated")
+        link.unlink()
+        link.symlink_to(self.source / "alpha")
+        state.write_text(json.dumps(wrong))
+        with self.assertRaisesRegex(installer.InstallError, "conflicting"):
+            installer.import_state(self.manifest, "test", legacy)
+        self.assertTrue(legacy.exists())
+
+    def test_import_resolves_manifest_alias_and_preserves_unrelated_entries(self):
+        self.run_install()
+        legacy = self.target / ".previous-skills.json"
+        (self.target / installer.STATE).rename(legacy)
+        alias = self.root / "alias.toml"
+        alias.symlink_to(self.manifest)
+        data = json.loads(legacy.read_text())
+        data["manifest"] = str(alias)
+        legacy.write_text(json.dumps(data))
+        extra = self.target / "plugin"
+        extra.mkdir()
+        (extra / "notes").write_text("user work")
+        installer.import_state(self.manifest, "test", legacy)
+        self.assertEqual((extra / "notes").read_text(), "user work")
+        self.assertEqual(self.run_install(check=True), 0)
+
     def test_prune_only_owned_links(self):
         self.run_install()
         (self.target / "unrelated").mkdir()

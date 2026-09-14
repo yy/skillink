@@ -172,7 +172,10 @@ def matches(path: Path, spec: str | dict) -> bool:
 
 
 def read_state(target: Path) -> dict:
-    path = target / STATE
+    return read_state_file(target / STATE)
+
+
+def read_state_file(path: Path) -> dict:
     if not path.exists() and not path.is_symlink():
         return {}
     require(not path.is_symlink(), f"state file must not be a symlink: {path}")
@@ -183,7 +186,18 @@ def read_state(target: Path) -> dict:
         {"version", "manifest", "profile", "skills"},
         "installation state",
     )
-    require(data["version"] == 1, "unsupported installation state version")
+    require(
+        type(data["version"]) is int and data["version"] == 1,
+        "unsupported installation state version",
+    )
+    require(
+        isinstance(data["manifest"], str) and Path(data["manifest"]).is_absolute(),
+        "invalid manifest in installation state",
+    )
+    require(
+        isinstance(data["profile"], str) and bool(NAME.fullmatch(data["profile"])),
+        "invalid profile in installation state",
+    )
     require(isinstance(data["skills"], dict), "invalid installation state")
     for name, spec in data["skills"].items():
         require(bool(NAME.fullmatch(name)), f"invalid owned name: {name}")
@@ -202,6 +216,56 @@ def read_state(target: Path) -> dict:
             f"invalid link targets in state: {name}",
         )
     return data
+
+
+def import_state(
+    manifest: Path,
+    profile: str,
+    source: Path,
+    target: str | None = None,
+    dry_run: bool = False,
+    check: bool = False,
+) -> int:
+    """Transfer compatible version-1 ownership records without changing skill links."""
+    destination, _, _ = selection(manifest, profile, target)
+    source = source.expanduser().absolute()
+    require(
+        destination.is_dir() and not destination.is_symlink(),
+        f"{destination}: import requires an existing installation directory",
+    )
+    require(
+        source.parent.resolve() == destination.resolve() and source.name != STATE,
+        "import state must be a different file in the installation directory",
+    )
+    require(source.is_file(), f"missing import state: {source}")
+    old = read_state_file(source)
+    require(
+        Path(old["manifest"]).resolve() == manifest.resolve()
+        and old["profile"] == profile,
+        "import state belongs to another manifest or profile",
+    )
+    for name, spec in old["skills"].items():
+        path = destination / name
+        if path.exists() or path.is_symlink():
+            require(matches(path, spec), f"{path}: managed entry was modified; preserved")
+    state = {**old, "manifest": str(manifest.resolve())}
+    current = read_state(destination)
+    require(not current or current == state, "conflicting Skillink ownership record")
+    archive = source.with_name(source.name + ".migrated")
+    require(
+        not archive.exists() and not archive.is_symlink(),
+        f"import backup already exists: {archive}",
+    )
+    print(f"import {source} -> {destination / STATE}; archive -> {archive}")
+    if dry_run or check:
+        return int(check)
+    if not current:
+        with tempfile.NamedTemporaryFile(mode="w", dir=destination, delete=False) as out:
+            json.dump(state, out, indent=2, sort_keys=True)
+            out.write("\n")
+        os.replace(out.name, destination / STATE)
+    source.rename(archive)
+    return 0
 
 
 def plan(
@@ -383,6 +447,11 @@ def main() -> int:
         help="manifest path (default: user Skillink configuration)",
     )
     parser.add_argument("--target", help="override the profile's installation directory")
+    parser.add_argument(
+        "--import-state",
+        type=Path,
+        help="import a compatible ownership record; leaves skill links unchanged",
+    )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(
         "--dry-run", action="store_true", help="show changes without writing"
@@ -403,7 +472,18 @@ def main() -> int:
     args = parser.parse_args()
     if args.safe and args.migrate:
         parser.error("--safe and --migrate cannot be combined")
+    if args.import_state and (args.safe or args.migrate):
+        parser.error("--import-state cannot be combined with --safe or --migrate")
     try:
+        if args.import_state:
+            return import_state(
+                manifest_path(args.manifest),
+                args.profile,
+                args.import_state,
+                args.target,
+                args.dry_run,
+                args.check,
+            )
         if args.safe:
             return install_safe(manifest_path(args.manifest), args.profile, args.target)
         return install(
