@@ -295,6 +295,80 @@ class InstallationTests(unittest.TestCase):
             self.run_install()
         self.assertTrue((self.source / "alpha/SKILL.md").exists())
 
+    def test_symlink_escapes_inside_source_skill_are_rejected(self):
+        outside = self.root / "secret.txt"
+        outside.write_text("top secret")
+        # Escaping file symlink inside a canonical skill.
+        escape = self.source / "alpha/leak.txt"
+        escape.symlink_to(outside)
+        with self.assertRaisesRegex(installer.InstallError, "symlink escapes"):
+            self.run_install()
+        self.assertFalse(self.target.exists())
+        escape.unlink()
+        # Escaping sibling symlink inside a variant install.
+        (self.source / "alpha/variants").mkdir()
+        (self.source / "alpha/variants/detailed.md").write_text(
+            (self.source / "alpha/SKILL.md").read_text() + "More detail.\n"
+        )
+        (self.source / "alpha/stolen.txt").symlink_to(outside)
+        self.write_manifest(extra='[profiles.test.variants]\n"main/alpha" = "detailed"\n')
+        with self.assertRaisesRegex(installer.InstallError, "symlink escapes"):
+            self.run_install()
+        (self.source / "alpha/stolen.txt").unlink()
+        # Escaping variant file symlink.
+        (self.source / "alpha/variants/bad.md").symlink_to(outside)
+        self.write_manifest(extra='[profiles.test.variants]\n"main/alpha" = "bad"\n')
+        with self.assertRaisesRegex(installer.InstallError, "symlink escapes"):
+            self.run_install()
+        (self.source / "alpha/variants/bad.md").unlink()
+        # Symlinked skill directory pointing outside source root.
+        rogue = self.root / "outside-skill"
+        rogue.mkdir()
+        (rogue / "SKILL.md").write_text(
+            "---\nname: rogue\ndescription: Rogue\n---\nRun.\n"
+        )
+        (self.source / "rogue").symlink_to(rogue)
+        self.write_manifest(include='["main/rogue"]')
+        with self.assertRaisesRegex(installer.InstallError, "symlink escapes"):
+            self.run_install()
+
+    def test_audit_flags_wildcards_new_skills_scripts_hidden_and_symlinks(self):
+        # Clean explicit profile with plain markdown skill passes audit with 0.
+        self.write_manifest(include='["main/alpha"]')
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = installer.audit(self.manifest, "test")
+        self.assertEqual(code, 0)
+        self.assertIn("0 findings", output.getvalue())
+        # Install once under wildcard, then add a new skill with scripts/hidden/symlink.
+        self.write_manifest(include='["main/*"]')
+        self.run_install()
+        beta = self.skill("beta")
+        scripts = beta / "scripts"
+        scripts.mkdir()
+        tool = scripts / "run.sh"
+        tool.write_text("#!/bin/sh\necho hi\n")
+        tool.chmod(0o755)
+        (beta / "helper.py").write_text("print('hi')\n")
+        (beta / ".hidden").write_text("secret\n")
+        (beta / "ref.md").symlink_to(beta / "SKILL.md")
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = installer.audit(self.manifest, "test")
+        report = output.getvalue()
+        self.assertEqual(code, 1)
+        self.assertIn("wildcard  main/*", report)
+        self.assertIn("new       main/beta", report)
+        self.assertIn("executable main/beta/scripts/run.sh", report)
+        self.assertIn("script    main/beta/helper.py", report)
+        self.assertIn("hidden    main/beta/.hidden", report)
+        self.assertIn("symlink   main/beta/ref.md", report)
+        # Dry-run install also annotates newly discovered wildcard skills.
+        plan_out = io.StringIO()
+        with contextlib.redirect_stdout(plan_out):
+            installer.install(self.manifest, "test", dry_run=True)
+        self.assertIn("(new via main/*)", plan_out.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,7 +1,6 @@
-#!/usr/bin/env -S uv run --script
+#!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["pyyaml>=6.0"]
 # ///
 """List manifest skills and descriptions, or build a searchable offline HTML catalog."""
 
@@ -20,7 +19,7 @@ from datetime import datetime
 from html import escape
 from pathlib import Path
 
-import yaml
+from frontmatter import parse_frontmatter
 from install_skills import path_value, require, selection, skill_file
 from manifest_path import manifest_path
 
@@ -57,12 +56,10 @@ def write_html(output: Path, content: str) -> None:
 
 def describe(path: Path, name: str) -> dict:
     skill_file(path, name)
-    lines = path.read_text().splitlines()
-    end = lines.index("---", 1)
-    metadata = yaml.safe_load("\n".join(lines[1:end]))
+    metadata, body = parse_frontmatter(path.read_text(), path)
     return {
         "description": " ".join(metadata["description"].split()),
-        "instructions": "\n".join(lines[end + 1 :]).strip(),
+        "instructions": body.strip(),
         "path": str(path),
     }
 
@@ -233,7 +230,7 @@ def main() -> int:
                 )
                 print()
             print(f"{len(rows)} entries")
-    except (OSError, ValueError, yaml.YAMLError) as exc:
+    except (OSError, ValueError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
     return 0

@@ -34,7 +34,7 @@ Selecting the same installed name from two sources is an error; exclude one expl
 Skill names are lowercase letters, digits, and single hyphens between words, at most 64 characters.
 A skill needs YAML frontmatter with a nonempty `description`, followed by a nonempty instruction body.
 
-Unknown fields, missing selected sources or skill files, invalid selections, and name collisions are errors before installation changes any links.
+Unknown fields, missing selected sources or skill files, invalid selections, symlink escapes outside a configured source root (or `SKILL.md`/variant symlinks escaping their skill directory), and name collisions are errors before installation changes any links.
 Profile names do not select a model.
 Profiles do not inherit from one another.
 

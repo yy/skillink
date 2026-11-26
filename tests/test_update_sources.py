@@ -1,4 +1,4 @@
-"""Exercise source updates using local Git remotes, without network access."""
+"""Exercise source fetch/review and apply updates using local Git remotes."""
 
 import contextlib
 import importlib.util
@@ -65,23 +65,42 @@ class UpdateTests(unittest.TestCase):
             result = updater.update(self.manifest, **kwargs)
         return result, output.getvalue()
 
-    def test_dry_run_and_deduplicated_fast_forward(self):
+    def test_dry_run_fetch_review_diff_and_apply(self):
         self.commit(self.author, "upstream")
         self.git(self.author, "push")
         before = self.git(self.checkout, "rev-parse", "HEAD")
+        # Dry-run makes no network fetch and does not touch HEAD.
         result, output = self.update(dry_run=True)
         self.assertEqual(result, 0)
-        self.assertEqual(output.count("WOULD UPDATE"), 1)
+        self.assertEqual(output.count("WOULD FETCH"), 1)
         self.assertEqual(self.git(self.checkout, "rev-parse", "HEAD"), before)
         self.assertFalse((self.checkout / ".git/FETCH_HEAD").exists())
+        # Default mode fetches and summarizes incoming commits without moving HEAD.
         result, output = self.update()
+        self.assertEqual(result, 0)
+        self.assertEqual(output.count("PENDING"), 1)
+        self.assertIn("1 incoming commit", output)
+        self.assertIn("tracked.txt", output)
+        self.assertEqual(self.git(self.checkout, "rev-parse", "HEAD"), before)
+        self.assertEqual((self.checkout / "tracked.txt").read_text(), "initial")
+        # --diff shows incoming file diffs while still leaving working tree untouched.
+        result, output = self.update(show_diff=True)
+        self.assertEqual(result, 0)
+        self.assertIn("+upstream", output)
+        self.assertEqual((self.checkout / "tracked.txt").read_text(), "initial")
+        # --apply fast-forwards the checkout.
+        result, output = self.update(apply=True)
         self.assertEqual(result, 0)
         self.assertEqual(output.count("UPDATED"), 1)
         self.assertEqual((self.checkout / "tracked.txt").read_text(), "upstream")
+        # Subsequent fetch reports up to date.
+        result, output = self.update()
+        self.assertEqual(result, 0)
+        self.assertIn("UP TO DATE", output)
 
     def test_dirty_and_diverged_repositories_preserve_work(self):
         (self.checkout / "tracked.txt").write_text("local work")
-        result, output = self.update()
+        result, output = self.update(apply=True)
         self.assertEqual(result, 1)
         self.assertIn("local changes", output)
         self.assertEqual((self.checkout / "tracked.txt").read_text(), "local work")
@@ -89,7 +108,13 @@ class UpdateTests(unittest.TestCase):
         before = self.git(self.checkout, "rev-parse", "HEAD")
         self.commit(self.author, "upstream commit")
         self.git(self.author, "push")
+        # Fetch mode detects divergence cleanly.
         result, output = self.update()
+        self.assertEqual(result, 1)
+        self.assertIn("DIVERGED", output)
+        self.assertEqual(self.git(self.checkout, "rev-parse", "HEAD"), before)
+        # Apply mode also refuses non-fast-forward merges.
+        result, output = self.update(apply=True)
         self.assertEqual(result, 1)
         self.assertIn("FAILED", output)
         self.assertEqual(self.git(self.checkout, "rev-parse", "HEAD"), before)
@@ -98,7 +123,7 @@ class UpdateTests(unittest.TestCase):
     def test_missing_source_does_not_block_other_sources(self):
         with self.manifest.open("a") as stream:
             stream.write('missing = "missing"\n')
-        result, output = self.update()
+        result, output = self.update(apply=True)
         self.assertEqual(result, 1)
         self.assertIn("SKIP missing", output)
         self.assertIn("UPDATED one, two", output)

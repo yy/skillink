@@ -1,9 +1,8 @@
-#!/usr/bin/env -S uv run --script
+#!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["pyyaml>=6.0"]
 # ///
-"""Install one skills.toml profile using owned symlinks."""
+"""Install, check, or audit one skills.toml profile using owned symlinks."""
 
 from __future__ import annotations
 
@@ -16,11 +15,26 @@ import tempfile
 import tomllib
 from pathlib import Path
 
-import yaml
+from frontmatter import parse_frontmatter
 from manifest_path import manifest_path
 
 STATE = ".skillink.json"
 NAME = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+SCRIPT_EXTENSIONS = {
+    ".bat",
+    ".bash",
+    ".cjs",
+    ".cmd",
+    ".js",
+    ".mjs",
+    ".pl",
+    ".ps1",
+    ".py",
+    ".rb",
+    ".sh",
+    ".ts",
+    ".zsh",
+}
 
 
 class InstallError(ValueError):
@@ -54,24 +68,58 @@ def string_list(value: object, label: str) -> list[str]:
     return value
 
 
+def safe_resolve(path: Path) -> Path:
+    try:
+        return path.resolve(strict=False)
+    except RuntimeError as exc:
+        raise InstallError(f"{path}: symlink loop detected") from exc
+
+
+def require_within(path: Path, boundary: Path, label: str) -> Path:
+    resolved = safe_resolve(path)
+    require(
+        resolved.is_relative_to(boundary),
+        f"{label}: symlink escapes {boundary}: {path} -> {resolved}",
+    )
+    return resolved
+
+
+def validate_skill_tree(
+    skill_root: Path, source_root: Path, skip_variants: bool = False
+) -> Path:
+    """Verify the skill directory and all internal symlinks stay inside source_root."""
+    resolved_skill = require_within(skill_root, source_root, "skill directory")
+    require_within(skill_root / "SKILL.md", resolved_skill, "SKILL.md")
+    for current, dirs, files in os.walk(resolved_skill, followlinks=False):
+        current_path = Path(current)
+        if skip_variants and current_path == resolved_skill and "variants" in dirs:
+            dirs.remove("variants")
+        for entry_name in [*dirs, *files]:
+            entry = current_path / entry_name
+            if entry.is_symlink():
+                require_within(entry, source_root, f"skill {skill_root.name}")
+    return resolved_skill
+
+
 def skill_file(path: Path, name: str) -> None:
     require(path.is_file(), f"missing skill file: {path}")
-    lines = path.read_text().splitlines()
-    require(bool(lines) and lines[0] == "---", f"{path}: missing frontmatter")
-    require("---" in lines[1:], f"{path}: unclosed frontmatter")
-    end = lines.index("---", 1)
-    data = yaml.safe_load("\n".join(lines[1:end]))
-    require(isinstance(data, dict), f"{path}: frontmatter must be a mapping")
+    try:
+        data, body = parse_frontmatter(path.read_text(), path)
+    except ValueError as exc:
+        raise InstallError(str(exc)) from exc
     require(data.get("name") == name, f"{path}: frontmatter name must be {name!r}")
     description = data.get("description")
     require(
         isinstance(description, str) and bool(description.strip()),
         f"{path}: missing description",
     )
-    require(bool("\n".join(lines[end + 1 :]).strip()), f"{path}: empty instructions")
+    require(bool(body.strip()), f"{path}: empty instructions")
 
 
-def selection(manifest: Path, profile: str, target: str | None = None) -> tuple:
+def resolve_selection(
+    manifest: Path, profile: str, target: str | None = None
+) -> tuple[Path, dict, dict, dict[str, tuple[str, Path, bool, str | None]]]:
+    """Validate manifest/profile and return selection details plus provenance."""
     data = tomllib.loads(manifest.read_text())
     keys(
         data,
@@ -104,7 +152,7 @@ def selection(manifest: Path, profile: str, target: str | None = None) -> tuple:
     require(profile in data["profiles"], f"unknown profile: {profile}")
     config = data["profiles"][profile]
     destination = path_value(target or config["target"], manifest.parent)
-    selected = {}
+    selected: dict[str, tuple[str, Path, bool]] = {}
     for identifier in config["include"]:
         parts = identifier.split("/")
         require(len(parts) == 2, f"invalid selection: {identifier}")
@@ -113,12 +161,16 @@ def selection(manifest: Path, profile: str, target: str | None = None) -> tuple:
         require(name == "*" or bool(NAME.fullmatch(name)), f"invalid skill: {identifier}")
         root = sources[source]
         require(root.is_dir(), f"missing source: {root}; clone it or edit the manifest")
+        wildcard = name == "*"
         paths = (
-            sorted(root.glob("*/SKILL.md")) if name == "*" else [root / name / "SKILL.md"]
+            sorted(root.glob("*/SKILL.md")) if wildcard else [root / name / "SKILL.md"]
         )
         require(bool(paths), f"selection matches no skills: {identifier}")
         for path in paths:
-            selected[f"{source}/{path.parent.name}"] = path.parent
+            skill_id = f"{source}/{path.parent.name}"
+            previous = selected.get(skill_id)
+            from_wildcard = wildcard if previous is None else (previous[2] and wildcard)
+            selected[skill_id] = (source, path.parent, from_wildcard)
     for identifier in config.get("exclude", []):
         require(identifier in selected, f"exclusion is not included: {identifier}")
         del selected[identifier]
@@ -130,34 +182,49 @@ def selection(manifest: Path, profile: str, target: str | None = None) -> tuple:
             f"invalid variant name: {variant!r}",
         )
     desired = {}
-    for identifier, root in selected.items():
+    provenance: dict[str, tuple[str, Path, bool, str | None]] = {}
+    for identifier, (source, root, from_wildcard) in selected.items():
         name = root.name
         require(
             bool(NAME.fullmatch(name)) and len(name) <= 64, f"invalid skill name: {name}"
         )
         require(name not in desired, f"name collision: {name}; exclude one source")
+        source_root = sources[source]
+        variant_name = variants.get(identifier)
+        resolved = validate_skill_tree(
+            root, source_root, skip_variants=variant_name is not None
+        )
         skill_file(root / "SKILL.md", name)
-        resolved = root.resolve()
         require(
             not destination.resolve().is_relative_to(resolved),
             f"target is inside selected source skill: {root}",
         )
-        if identifier in variants:
-            variant = root / "variants" / f"{variants[identifier]}.md"
+        if variant_name is not None:
+            variant = root / "variants" / f"{variant_name}.md"
+            require_within(variant, resolved, f"variant {variant_name}")
             skill_file(variant, name)
-            desired[name] = {
-                entry.name: str(entry.resolve())
-                for entry in root.iterdir()
-                if entry.name not in {"SKILL.md", "variants"}
-            }
-            desired[name]["SKILL.md"] = str(variant.resolve())
+            entries = {}
+            for entry in resolved.iterdir():
+                if entry.name in {"SKILL.md", "variants"}:
+                    continue
+                entries[entry.name] = str(
+                    require_within(entry, source_root, f"skill {name}")
+                )
+            entries["SKILL.md"] = str(variant.resolve())
+            desired[name] = entries
         else:
             desired[name] = str(resolved)
+        provenance[name] = (identifier, resolved, from_wildcard, variant_name)
+    return destination, desired, sources, provenance
+
+
+def selection(manifest: Path, profile: str, target: str | None = None) -> tuple:
+    destination, desired, sources, _ = resolve_selection(manifest, profile, target)
     return destination, desired, sources
 
 
 def link_target(path: Path) -> str:
-    return str(path.resolve(strict=False))
+    return str(safe_resolve(path))
 
 
 def matches(path: Path, spec: str | dict) -> bool:
@@ -335,6 +402,62 @@ def plan(
     return destination, desired, changes, whole_link
 
 
+def audit(manifest: Path, profile: str, target: str | None = None) -> int:
+    """Report supply-chain risk signals for a profile without changing any links."""
+    destination, desired, _, provenance = resolve_selection(manifest, profile, target)
+    data = tomllib.loads(manifest.read_text())
+    config = data["profiles"][profile]
+    wildcards = [item for item in config["include"] if item.endswith("/*")]
+    state = {} if destination.is_symlink() else read_state(destination)
+    owned = state.get("skills", {}) if state else {}
+    findings: list[str] = []
+    for item in wildcards:
+        findings.append(
+            f"wildcard  {item} (upstream additions will be selected automatically)"
+        )
+    for name in sorted(desired):
+        identifier, resolved, from_wildcard, variant_name = provenance[name]
+        if state and from_wildcard and name not in owned:
+            source = identifier.split("/")[0]
+            findings.append(f"new       {identifier} (newly discovered via {source}/*)")
+        for current, dirs, files in os.walk(resolved, followlinks=False):
+            current_path = Path(current)
+            if (
+                variant_name is not None
+                and current_path == resolved
+                and "variants" in dirs
+            ):
+                dirs.remove("variants")
+            for dirname in sorted(dirs):
+                entry = current_path / dirname
+                rel = entry.relative_to(resolved)
+                if dirname.startswith("."):
+                    findings.append(f"hidden    {identifier}/{rel}/")
+                if entry.is_symlink():
+                    findings.append(
+                        f"symlink   {identifier}/{rel} -> {os.readlink(entry)}"
+                    )
+            for filename in sorted(files):
+                entry = current_path / filename
+                rel = entry.relative_to(resolved)
+                if filename.startswith("."):
+                    findings.append(f"hidden    {identifier}/{rel}")
+                if entry.is_symlink():
+                    findings.append(
+                        f"symlink   {identifier}/{rel} -> {os.readlink(entry)}"
+                    )
+                    continue
+                is_exec = bool(entry.stat().st_mode & 0o111)
+                is_script = entry.suffix.lower() in SCRIPT_EXTENSIONS
+                if is_exec or is_script:
+                    kind = "executable" if is_exec else "script"
+                    findings.append(f"{kind:<9} {identifier}/{rel}")
+    for line in findings:
+        print(line)
+    print(f"{profile}: audited {len(desired)} skills, {len(findings)} findings")
+    return int(bool(findings))
+
+
 def remove_entry(path: Path, spec: str | dict) -> None:
     if isinstance(spec, str):
         path.unlink()
@@ -353,17 +476,27 @@ def install(
     migrate: bool = False,
 ) -> int:
     destination, desired, changes, whole_link = plan(manifest, profile, target, migrate)
+    _, _, _, provenance = resolve_selection(manifest, profile, target)
+    existing_state = {} if whole_link else read_state(destination)
     state = {
         "version": 1,
         "manifest": str(manifest),
         "profile": profile,
         "skills": desired,
     }
-    state_ok = not whole_link and read_state(destination) == state
+    state_ok = not whole_link and existing_state == state
     if whole_link:
         print(f"migrate directory link {destination}")
     for action, name, _, new in changes:
-        print(f"{action:7} {destination / name}" + (f" -> {new}" if new else ""))
+        note = ""
+        if action == "link" and existing_state and name in provenance:
+            identifier, _, from_wildcard, _ = provenance[name]
+            if from_wildcard:
+                source = identifier.split("/")[0]
+                note = f" (new via {source}/*)"
+        print(
+            f"{action:7} {destination / name}" + (f" -> {new}" if new else "") + note
+        )
     if not state_ok:
         print(f"record  {destination / STATE}")
     print(f"{profile}: {len(desired)} skills, {len(changes)} changes")
@@ -459,6 +592,11 @@ def main() -> int:
     mode.add_argument(
         "--check", action="store_true", help="exit 1 if installation differs"
     )
+    mode.add_argument(
+        "--audit",
+        action="store_true",
+        help="audit wildcards, new wildcard skills, scripts, hidden files, and symlinks",
+    )
     parser.add_argument(
         "--migrate",
         action="store_true",
@@ -472,8 +610,12 @@ def main() -> int:
     args = parser.parse_args()
     if args.safe and args.migrate:
         parser.error("--safe and --migrate cannot be combined")
-    if args.import_state and (args.safe or args.migrate):
-        parser.error("--import-state cannot be combined with --safe or --migrate")
+    if args.audit and args.migrate:
+        parser.error("--audit and --migrate cannot be combined")
+    if args.import_state and (args.safe or args.migrate or args.audit):
+        parser.error(
+            "--import-state cannot be combined with --safe, --migrate, or --audit"
+        )
     try:
         if args.import_state:
             return import_state(
@@ -484,6 +626,8 @@ def main() -> int:
                 args.dry_run,
                 args.check,
             )
+        if args.audit:
+            return audit(manifest_path(args.manifest), args.profile, args.target)
         if args.safe:
             return install_safe(manifest_path(args.manifest), args.profile, args.target)
         return install(
@@ -494,7 +638,7 @@ def main() -> int:
             args.check,
             args.migrate,
         )
-    except (InstallError, OSError, ValueError, yaml.YAMLError) as exc:
+    except (InstallError, OSError, ValueError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
 
